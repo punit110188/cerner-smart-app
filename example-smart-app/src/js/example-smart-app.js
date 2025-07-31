@@ -7,47 +7,77 @@
       ret.reject();
     }
 
- function onReady(smart) {
-  if (smart.hasOwnProperty('patient')) {
-    smart.patient.read().then(function(pt) {
-      const fname = Array.isArray(pt.name?.[0]?.given) ? pt.name[0].given.join(" ") : pt.name?.[0]?.given || '';
-      const lname = Array.isArray(pt.name?.[0]?.family) ? pt.name[0].family.join(" ") : pt.name?.[0]?.family || '';
-      const info = {
-        PatientName: `${fname} ${lname}`.trim(),
-        gender: pt.gender || '',
-        birthdate: pt.birthDate || ''
-      };
+    function onReady(smart)  {
+      if (smart.hasOwnProperty('patient')) {
+        var patient = smart.patient;
+        var pt = patient.read();
+        var obv = smart.patient.api.fetchAll({
+                    type: 'Observation',
+                    query: {
+                      code: {
+                        $or: ['http://loinc.org|8302-2', 'http://loinc.org|8462-4',
+                              'http://loinc.org|8480-6', 'http://loinc.org|2085-9',
+                              'http://loinc.org|2089-1', 'http://loinc.org|55284-4']
+                      }
+                    }
+                  });
 
-      // Fetch trials next
-      fetch("https://clinicaltrials.gov/api/v2/studies?query.titles=cancer&pageSize=10")
-        .then(res => res.json())
-        .then(data => {
-          const trials = data.studies.map(extractTrialDetails);
+        $.when(pt, obv).fail(onError);
 
-          const payload = {
-            patient: info,
-            trials: trials
-          };
+        $.when(pt, obv).done(function(patient, obv) {
+          var byCodes = smart.byCodes(obv, 'code');
+          var gender = patient.gender;
 
-          const json = JSON.stringify(payload);
-          const encoded = encodeURIComponent(btoa(json));
+          var fname = '';
+          var lname = '';
 
-          const vbAppUrl = `http://127.0.0.1:59030/L1VzZXJzL3B1bmlzcml2L0Rvd25sb2Fkcy9wZGRfdGVzdC0xLjA/design/pdd_test/1750998212126/preview/webApps/providerdirectory/?data=${encoded}`;
-          console.log("Redirecting to:", vbAppUrl);
-          window.location.href = vbAppUrl;
-        })
-        .catch(err => {
-          console.error("Failed to fetch trials", err);
+          // if (typeof patient.name[0] !== 'undefined') {
+          //   fname = patient.name[0].given.join(' ');
+          //   lname = patient.name[0].family.join(' ');
+          // }
+
+          if (typeof patient.name[0] !== 'undefined') {
+              // If 'given' is an array, join the names with a space; otherwise, use it directly
+              fname = Array.isArray(patient.name[0].given) ? patient.name[0].given.join(' ') : patient.name[0].given;
+
+            // If 'family' is an array, join it with a space; otherwise, use the string directly
+            lname = Array.isArray(patient.name[0].family) ? patient.name[0].family.join(' ') : patient.name[0].family;
+          }
+
+          var height = byCodes('8302-2');
+          var systolicbp = getBloodPressureValue(byCodes('55284-4'),'8480-6');
+          var diastolicbp = getBloodPressureValue(byCodes('55284-4'),'8462-4');
+          var hdl = byCodes('2085-9');
+          var ldl = byCodes('2089-1');
+
+          var p = defaultPatient();
+          p.birthdate = patient.birthDate;
+          p.gender = gender;
+          p.fname = fname;
+          p.lname = lname;
+          p.height = getQuantityValueAndUnit(height[0]);
+
+          if (typeof systolicbp != 'undefined')  {
+            p.systolicbp = systolicbp;
+          }
+
+          if (typeof diastolicbp != 'undefined') {
+            p.diastolicbp = diastolicbp;
+          }
+
+          p.hdl = getQuantityValueAndUnit(hdl[0]);
+          p.ldl = getQuantityValueAndUnit(ldl[0]);
+
+          ret.resolve(p);
         });
-
-    }).fail(onError);
-  }
-}
-
-
+      } else {
+        onError();
+      }
+    }
 
     FHIR.oauth2.ready(onReady, onError);
     return ret.promise();
+
   };
 
   function defaultPatient(){
@@ -64,6 +94,34 @@
     };
   }
 
+  function getBloodPressureValue(BPObservations, typeOfPressure) {
+    var formattedBPObservations = [];
+    BPObservations.forEach(function(observation){
+      var BP = observation.component.find(function(component){
+        return component.code.coding.find(function(coding) {
+          return coding.code == typeOfPressure;
+        });
+      });
+      if (BP) {
+        observation.valueQuantity = BP.valueQuantity;
+        formattedBPObservations.push(observation);
+      }
+    });
+
+    return getQuantityValueAndUnit(formattedBPObservations[0]);
+  }
+
+  function getQuantityValueAndUnit(ob) {
+    if (typeof ob != 'undefined' &&
+        typeof ob.valueQuantity != 'undefined' &&
+        typeof ob.valueQuantity.value != 'undefined' &&
+        typeof ob.valueQuantity.unit != 'undefined') {
+          return ob.valueQuantity.value + ' ' + ob.valueQuantity.unit;
+    } else {
+      return undefined;
+    }
+  }
+
   window.drawVisualization = function(p) {
     $('#holder').show();
     $('#loading').hide();
@@ -76,54 +134,37 @@
     $('#diastolicbp').html(p.diastolicbp);
     $('#ldl').html(p.ldl);
     $('#hdl').html(p.hdl);
-    fetchTrialsV2();
+    fetchAndRenderClinicalTrials();
   };
 
-  function fetchTrialsV2() {
-    fetch("https://clinicaltrials.gov/api/v2/studies?query.titles=cancer&pageSize=50")
-      .then(res => res.json())
-      .then(data => renderTrialsV2(data.studies))
-      .catch(err => console.error("Failed to fetch trial data", err));
-  }
+  function fetchAndRenderClinicalTrials() {
+  fetch("https://clinicaltrials.gov/api/v2/studies?query.titles=cancer&pageSize=50")
+    .then(res => res.json())
+    .then(data => {
+      const trials = data.studies.slice(0, 10);
+      const container = document.getElementById("trials-list");
+      container.innerHTML = "";
 
-  function renderTrialsV2(studies) {
-    const container = document.getElementById("trials-list");
-    container.innerHTML = "";
+      trials.forEach((t, i) => {
+        const html = `
+          <div style="margin-bottom: 10px; border-bottom: 1px solid #ddd; padding-bottom: 6px;">
+            <strong>${i + 1}. ${t.briefTitle}</strong><br>
+            Status: ${t.studyStatus}<br>
+            Condition: ${t.conditions?.join(", ") || "N/A"}<br>
+            Start Date: ${t.startDate || "N/A"}<br>
+            <a href="https://clinicaltrials.gov/study/${t.nctId}" target="_blank">View on ClinicalTrials.gov</a>
+          </div>
+        `;
+        container.innerHTML += html;
+      });
 
-    studies.slice(0, 10).forEach((study, i) => {
-      const trial = extractTrialDetails(study);
-
-      const html = `
-        <div style="margin-bottom: 16px; padding-bottom: 8px; border-bottom: 1px solid #ccc;">
-          <strong>${i + 1}. ${trial.title}</strong><br/>
-          <em>${trial.sponsor}</em><br/>
-          Status: ${trial.status || "N/A"}<br/>
-          Start Date: ${trial.startDate || "N/A"}<br/>
-          <p>${trial.summary}</p>
-          <a href="${trial.url}" target="_blank">View Full Trial</a>
-        </div>
-      `;
-      container.innerHTML += html;
+      document.getElementById("trials").style.display = "block";
+    })
+    .catch(err => {
+      console.error("Failed to load clinical trials:", err);
+      document.getElementById("trials-list").innerHTML = "<p>Error loading clinical trials.</p>";
     });
+}
 
-    document.getElementById("trials").style.display = "block";
-  }
-
-  function extractTrialDetails(study) {
-    const idModule = study.protocolSection.identificationModule;
-    const statusModule = study.protocolSection.statusModule;
-    const descModule = study.protocolSection.descriptionModule;
-    const sponsorModule = study.protocolSection.sponsorCollaboratorsModule;
-
-    return {
-      nctId: idModule?.nctId,
-      title: idModule?.briefTitle,
-      sponsor: sponsorModule?.leadSponsor?.name,
-      status: statusModule?.overallStatus,
-      startDate: statusModule?.startDateStruct?.date,
-      summary: descModule?.briefSummary,
-      url: `https://clinicaltrials.gov/study/${idModule?.nctId}`
-    };
-  }
 
 })(window);
