@@ -38,7 +38,7 @@
 
           const encoded = encodeURIComponent(safeBtoa(json));
 
-          const vbAppUrl = `https://1cf3b5d34ad8.ngrok-free.app/L1VzZXJzL3B1bmlzcml2L0Rvd25sb2Fkcy9wZGRfdGVzdC0xLjA/design/pdd_test/1750998212126/preview/webApps/providerdirectory/?data=${encoded}`;
+          const vbAppUrl = `https://06fc0794d60e.ngrok-free.app/L1VzZXJzL3B1bmlzcml2L0Rvd25sb2Fkcy9wZGRfdGVzdC0xLjA/design/pdd_test/1750998212126/preview/webApps/providerdirectory/?data=${encoded}`;
           console.log("Redirecting to:", vbAppUrl);
           window.location.href = vbAppUrl;
         })
